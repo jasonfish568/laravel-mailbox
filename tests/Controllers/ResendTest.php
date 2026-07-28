@@ -88,6 +88,46 @@ class ResendTest extends TestCase
     }
 
     #[Test]
+    public function it_does_not_allow_unsigned_request_parameters_to_repair_malformed_json()
+    {
+        Bus::fake();
+
+        $payload = '{"type":';
+        $webhookId = 'msg_unsigned_query';
+        $timestamp = now()->timestamp;
+        $secret = 'test-secret';
+        config([
+            'mailbox.services.resend.webhook_secret' => 'whsec_'.base64_encode($secret),
+        ]);
+        $signature = base64_encode(hash_hmac(
+            'sha256',
+            $webhookId.'.'.$timestamp.'.'.$payload,
+            $secret,
+            true
+        ));
+
+        $this->call(
+            'POST',
+            '/laravel-mailbox/resend?type=email.received&data%5Bemail_id%5D=email_unsigned',
+            [
+                'type' => 'email.received',
+                'data' => ['email_id' => 'email_unsigned'],
+            ],
+            [],
+            [],
+            [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_SVIX_ID' => $webhookId,
+                'HTTP_SVIX_TIMESTAMP' => (string) $timestamp,
+                'HTTP_SVIX_SIGNATURE' => 'v1,'.$signature,
+            ],
+            $payload
+        )->assertStatus(400);
+
+        Bus::assertNothingDispatched();
+    }
+
+    #[Test]
     public function it_rejects_invalid_received_payloads()
     {
         Bus::fake();

@@ -6,10 +6,13 @@ use BeyondCode\Mailbox\Support\ResendWebhookSignature;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use JsonException;
 use LogicException;
 
 class ResendRequest extends FormRequest
 {
+    protected array $payload = [];
+
     protected function prepareForValidation()
     {
         $secret = config('mailbox.services.resend.webhook_secret');
@@ -27,6 +30,27 @@ class ResendRequest extends FormRequest
         );
 
         abort_unless($signed, 401, 'Invalid Resend signature or timestamp.');
+
+        try {
+            $payload = json_decode($this->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            throw new HttpResponseException(response()->json([
+                'message' => 'Invalid Resend webhook payload.',
+            ], 400));
+        }
+
+        if (! is_array($payload)) {
+            throw new HttpResponseException(response()->json([
+                'message' => 'Invalid Resend webhook payload.',
+            ], 400));
+        }
+
+        $this->payload = $payload;
+    }
+
+    public function validationData()
+    {
+        return $this->payload;
     }
 
     public function rules()
@@ -47,12 +71,12 @@ class ResendRequest extends FormRequest
 
     public function eventType(): string
     {
-        return $this->input('type');
+        return $this->validated('type');
     }
 
     public function emailId(): ?string
     {
-        return $this->input('data.email_id');
+        return $this->validated('data.email_id');
     }
 
     public function webhookId(): string
