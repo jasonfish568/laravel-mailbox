@@ -84,6 +84,11 @@ MAILBOX_RESEND_QUEUE_CONNECTION=sync
 MAILBOX_RESEND_RATE_LIMIT=5
 ```
 
+When upgrading an application with a previously published `config/mailbox.php`,
+the package fills in missing Resend service keys without replacing explicit
+Resend values. Rebuild Laravel's cached configuration after the upgrade so the
+new environment variables are captured.
+
 The Resend API key and the endpoint-specific `whsec_` webhook signing secret
 are different credentials. The incoming webhook contains metadata rather than
 the complete message. Laravel Mailbox uses the signed `email_id` to call
@@ -106,10 +111,15 @@ Resend's default API limit is five requests per second per team, so
 share the team's allowance. Only raise it after Resend has approved a higher
 limit for the team.
 
-The job timeout is 180 seconds. Configure the queue connection's `retry_after`
-above 180 seconds and keep the worker's `--timeout` below `retry_after`.
-Workers must also have enough memory for the complete MIME message, including
-attachments.
+The job timeout is 180 seconds. For Redis, database, and other connections with
+a `retry_after` setting, configure `retry_after` above 180 seconds. For SQS,
+set the queue's Default Visibility Timeout above 180 seconds instead. Keep the
+worker's `--timeout` below the applicable retry or visibility window.
+
+Unique-job locking and per-second throttling both use Laravel's cache. Workers
+on multiple nodes must use the same shared cache store, and that store must
+support atomic locks and increments, such as Redis. Workers must also have
+enough memory for the complete MIME message, including attachments.
 
 Webhook and queue delivery are at least once. Make mailbox handlers with side
 effects idempotent, preferably using the raw email's stable `Message-Id` as the

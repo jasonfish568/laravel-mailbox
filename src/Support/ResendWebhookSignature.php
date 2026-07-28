@@ -20,14 +20,10 @@ class ResendWebhookSignature
             return false;
         }
 
-        if (! str_starts_with($secret, static::PREFIX)) {
-            return false;
-        }
-
-        $decodedSecret = base64_decode(substr($secret, strlen(static::PREFIX)), true);
+        $decodedSecret = $this->decodeSecret($secret);
         $timestamp = filter_var($timestamp, FILTER_VALIDATE_INT);
 
-        if ($decodedSecret === false || $decodedSecret === '' || $timestamp === false) {
+        if ($decodedSecret === null || $timestamp === false) {
             return false;
         }
 
@@ -53,5 +49,21 @@ class ResendWebhookSignature
         }
 
         return false;
+    }
+
+    public function isValidSecret(?string $secret): bool
+    {
+        return $this->decodeSecret($secret) !== null;
+    }
+
+    protected function decodeSecret(?string $secret): ?string
+    {
+        if (! is_string($secret) || ! str_starts_with($secret, static::PREFIX)) {
+            return null;
+        }
+
+        $decoded = base64_decode(substr($secret, strlen(static::PREFIX)), true);
+
+        return $decoded === false || $decoded === '' ? null : $decoded;
     }
 }

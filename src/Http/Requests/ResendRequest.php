@@ -16,12 +16,13 @@ class ResendRequest extends FormRequest
     protected function prepareForValidation()
     {
         $secret = config('mailbox.services.resend.webhook_secret');
+        $signature = app(ResendWebhookSignature::class);
 
-        if (! is_string($secret) || trim($secret) === '') {
-            throw new LogicException('Resend webhook secret is not configured.');
+        if (! is_string($secret) || ! $signature->isValidSecret($secret)) {
+            throw new LogicException('Resend webhook secret is not configured correctly.');
         }
 
-        $signed = app(ResendWebhookSignature::class)->verify(
+        $signed = $signature->verify(
             $this->getContent(),
             $this->header('svix-id'),
             $this->header('svix-timestamp'),

@@ -8,8 +8,13 @@ use BeyondCode\Mailbox\InboundEmail;
 use BeyondCode\Mailbox\Jobs\ProcessResendEmail;
 use BeyondCode\Mailbox\Tests\Concerns\SignsResendWebhooks;
 use BeyondCode\Mailbox\Tests\TestCase;
+use Illuminate\Bus\UniqueLock;
 use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -25,6 +30,7 @@ class ResendTest extends TestCase
         parent::getEnvironmentSetUp($app);
 
         $app['config']['mailbox.driver'] = 'resend';
+        $app['config']['mailbox.services.resend.api_key'] = 're_test';
     }
 
     #[Test]
@@ -213,9 +219,11 @@ class ResendTest extends TestCase
     }
 
     #[Test]
-    public function it_reports_a_missing_webhook_secret_as_server_configuration()
+    #[DataProvider('invalidWebhookSecrets')]
+    public function it_reports_invalid_webhook_secret_configuration_as_a_server_error($secret)
     {
         Bus::fake();
+        config(['mailbox.services.resend.webhook_secret' => $secret]);
         $payload = '{"type":"email.received","data":{"email_id":"email_123"}}';
 
         $this->postResendWebhook(
@@ -226,9 +234,67 @@ class ResendTest extends TestCase
         Bus::assertNothingDispatched();
     }
 
+    public static function invalidWebhookSecrets(): array
+    {
+        return [
+            'missing' => [null],
+            'blank' => ['   '],
+            'missing prefix' => ['test-secret'],
+            'bad Base64' => ['whsec_%%%'],
+            'empty decoded value' => ['whsec_'],
+        ];
+    }
+
+    #[Test]
+    public function it_reports_a_well_formed_nonmatching_webhook_secret_as_unauthorized()
+    {
+        Bus::fake();
+        config([
+            'mailbox.services.resend.webhook_secret' => 'whsec_'.base64_encode('other-secret'),
+        ]);
+
+        $this->postResendWebhook(
+            '{"type":"email.received","data":{"email_id":"email_123"}}',
+            configureSecret: false
+        )->assertStatus(401);
+
+        Bus::assertNothingDispatched();
+    }
+
+    #[Test]
+    #[DataProvider('missingApiKeys')]
+    public function it_rejects_missing_api_keys_before_acknowledging_an_async_webhook($apiKey)
+    {
+        Bus::fake();
+        config([
+            'mailbox.services.resend.api_key' => $apiKey,
+            'mailbox.services.resend.queue_connection' => 'redis',
+        ]);
+
+        $this->postResendWebhook(
+            '{"type":"email.received","data":{"email_id":"email_123"}}'
+        )->assertStatus(500);
+
+        Bus::assertNothingDispatched();
+    }
+
+    public static function missingApiKeys(): array
+    {
+        return [
+            'missing' => [null],
+            'empty' => [''],
+            'blank' => ['   '],
+        ];
+    }
+
     #[Test]
     public function it_releases_the_unique_lock_when_dispatch_fails()
     {
+        config([
+            'mailbox.services.resend.queue_connection' => 'resend-async',
+            'queue.connections.resend-async' => ['driver' => 'null'],
+        ]);
+
         $original = $this->app->make(Dispatcher::class);
         $dispatcher = Mockery::mock(Dispatcher::class);
         $dispatcher->shouldReceive('dispatch')
@@ -249,6 +315,55 @@ class ResendTest extends TestCase
 
         $this->postResendWebhook($payload, 'msg_retry')->assertOk();
         Bus::assertDispatched(ProcessResendEmail::class);
+    }
+
+    #[Test]
+    public function it_does_not_release_a_retry_lock_after_a_named_sync_connection_fails()
+    {
+        config([
+            'mailbox.services.resend.queue_connection' => 'resend-inline',
+            'queue.connections.resend-inline' => ['driver' => 'sync'],
+        ]);
+
+        Http::fake([
+            ResendClient::API_URL.'/email_123' => Http::response('', 500),
+        ]);
+
+        $job = new ProcessResendEmail('email_123', 'msg_sync_interleaving');
+        $lockKey = UniqueLock::getKey($job);
+        $retryLock = null;
+        $retryLockAcquired = false;
+
+        Event::listen(JobFailed::class, function () use (
+            $lockKey,
+            &$retryLock,
+            &$retryLockAcquired
+        ) {
+            $retryLock = $this->app->make(Cache::class)->lock($lockKey, 60);
+            $retryLockAcquired = $retryLock->get();
+        });
+
+        $this->postResendWebhook(
+            '{"type":"email.received","data":{"email_id":"email_123"}}',
+            'msg_sync_interleaving'
+        )->assertStatus(500);
+
+        $this->assertTrue($retryLockAcquired);
+        $this->assertInstanceOf(Lock::class, $retryLock);
+
+        $probe = $this->app->make(Cache::class)->lock($lockKey, 60);
+        $thirdRequestAcquired = $probe->get();
+
+        if ($thirdRequestAcquired) {
+            $probe->release();
+        }
+
+        $retryLock->release();
+
+        $this->assertFalse(
+            $thirdRequestAcquired,
+            'The sync exception path released the lock acquired by a concurrent retry.'
+        );
     }
 
     #[Test]

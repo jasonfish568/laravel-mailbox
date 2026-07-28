@@ -19,6 +19,7 @@ class ResendController
 
         $connection = config('mailbox.services.resend.queue_connection', 'sync');
         $rateLimit = (int) config('mailbox.services.resend.rate_limit', 5);
+        $apiKey = config('mailbox.services.resend.api_key');
 
         if (! is_string($connection) || trim($connection) === '') {
             throw new LogicException('Resend queue connection is not configured.');
@@ -28,13 +29,20 @@ class ResendController
             throw new LogicException('Resend API rate limit must be a positive integer.');
         }
 
+        if (! is_string($apiKey) || trim($apiKey) === '') {
+            throw new LogicException('Resend API key is not configured.');
+        }
+
         $job = (new ProcessResendEmail($request->emailId(), $request->webhookId()))
             ->onConnection($connection);
+        $synchronous = $job->usesSynchronousQueue();
 
         try {
             dispatch($job);
         } catch (Throwable $exception) {
-            (new UniqueLock(app(Cache::class)))->release($job);
+            if (! $synchronous) {
+                (new UniqueLock(app(Cache::class)))->release($job);
+            }
 
             throw $exception;
         }

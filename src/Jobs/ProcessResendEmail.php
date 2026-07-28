@@ -10,10 +10,11 @@ use DateTimeInterface;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Queue\InteractsWithQueue;
 
 class ProcessResendEmail implements ShouldQueue, ShouldBeUnique
 {
-    use Queueable;
+    use InteractsWithQueue, Queueable;
 
     public $timeout = 180;
 
@@ -43,7 +44,19 @@ class ProcessResendEmail implements ShouldQueue, ShouldBeUnique
 
     public function middleware(): array
     {
-        return $this->connection === 'sync' ? [] : [new ResendRateLimited];
+        return $this->usesSynchronousQueue() ? [] : [new ResendRateLimited];
+    }
+
+    public function usesSynchronousQueue(): bool
+    {
+        $connection = $this->connection ?: config('queue.default');
+        $connections = config('queue.connections', []);
+
+        return is_string($connection)
+            && is_array($connections)
+            && isset($connections[$connection])
+            && is_array($connections[$connection])
+            && ($connections[$connection]['driver'] ?? null) === 'sync';
     }
 
     public function handle(ResendClient $client): void

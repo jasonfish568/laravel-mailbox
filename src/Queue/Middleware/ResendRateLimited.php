@@ -19,12 +19,11 @@ class ResendRateLimited
 
         /** @var RateLimiter $limiter */
         $limiter = app(RateLimiter::class);
+        $reservations = $limiter->hit(static::KEY, 1);
 
-        if ($limiter->tooManyAttempts(static::KEY, $maxAttempts)) {
+        if ($reservations > $maxAttempts) {
             return $job->release($limiter->availableIn(static::KEY) + 1);
         }
-
-        $limiter->hit(static::KEY, 1);
 
         return $next($job);
     }

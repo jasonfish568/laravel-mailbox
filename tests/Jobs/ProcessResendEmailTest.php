@@ -40,6 +40,19 @@ class ProcessResendEmailTest extends TestCase
     }
 
     #[Test]
+    public function it_skips_rate_limiting_for_a_named_sync_queue_connection()
+    {
+        config([
+            'queue.connections.resend-inline' => ['driver' => 'sync'],
+        ]);
+
+        $job = (new ProcessResendEmail('email_123', 'msg_123'))
+            ->onConnection('resend-inline');
+
+        $this->assertSame([], $job->middleware());
+    }
+
+    #[Test]
     public function it_builds_the_configured_model_and_calls_mailboxes()
     {
         config(['mailbox.model' => TestResendInboundEmail::class]);
