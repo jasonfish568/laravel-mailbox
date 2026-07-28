@@ -107,13 +107,6 @@ from the Svix signature.
 Add `createResendDriver()` and import the new driver, matching the existing
 driver factory pattern.
 
-### `MailboxServiceProvider`
-
-Register a package-specific queue rate limiter backed by Laravel's cache rate
-limiter. The limiter reads `mailbox.services.resend.rate_limit` and permits
-that many jobs per second. It is used only when the Resend job is dispatched
-to an asynchronous connection.
-
 ### `Http\Requests\ResendRequest`
 
 The request is the inbound security boundary. It will:
@@ -156,13 +149,14 @@ After request validation:
 - create `Jobs\ProcessResendEmail` with only the signed `email_id` and
   `svix-id`;
 - select the configured queue connection;
-- dispatch the job;
+- dispatch the job through Laravel's `dispatch()` helper;
 - return 200 after successful dispatch.
 
 When the configured connection is `sync`, dispatch executes the job in the
 request and propagates exceptions as HTTP 5xx. With an asynchronous connection,
 HTTP 200 means the job was accepted by Laravel's queue, not that mailbox
-processing has completed.
+processing has completed. Using the `dispatch()` helper also ensures Laravel
+acquires the `ShouldBeUnique` lock before pushing the job.
 
 ### `Jobs\ProcessResendEmail`
 
@@ -175,9 +169,8 @@ The job will implement `ShouldQueue` and `ShouldBeUnique`.
 - The job carries only scalar identifiers; it never serializes the request,
   API key, webhook secret, MIME, or signed download URL.
 
-For asynchronous connections, the job applies Laravel queue rate-limiting
-middleware under a package-specific limiter. The limiter reads
-`mailbox.services.resend.rate_limit`. The `sync` connection relies on Resend's
+For asynchronous connections, the job applies
+`Queue\Middleware\ResendRateLimited`. The `sync` connection relies on Resend's
 webhook backoff instead of releasing a synchronous job.
 
 The job gets a fresh signed raw download URL during each attempt by invoking
@@ -203,6 +196,27 @@ After the final value, subsequent processing failures continue using the
 releases use short capacity-based delays instead of this exception backoff.
 A job timeout of 180 seconds leaves room for a large MIME download and mailbox
 parsing while still bounding a stuck worker.
+
+### `Queue\Middleware\ResendRateLimited`
+
+Laravel 10's named rate-limit definition object supports minute windows but
+does not expose `Limit::perSecond()`. To preserve the package's Laravel 10
+floor, a small package middleware will use the cross-version
+`Illuminate\Cache\RateLimiter` API directly.
+
+For each asynchronous job attempt, the middleware will:
+
+1. read and validate the positive integer
+   `mailbox.services.resend.rate_limit`;
+2. check a package-specific cache key against that maximum;
+3. release an over-limit job for `availableIn($key) + 1` seconds;
+4. otherwise call `hit($key, 1)` to consume one slot in a one-second window;
+5. pass the job to the next middleware or handler.
+
+The middleware resolves `RateLimiter` from Laravel's container inside
+`handle()`, so the queued middleware object contains no unserializable cache
+service. It deliberately applies only to asynchronous connections because
+releasing a job on the `sync` connection cannot defer work.
 
 ### `Clients\ResendClient`
 
@@ -361,7 +375,10 @@ All tests use Laravel, bus, queue, cache, and HTTP fakes. No test calls Resend.
 - The job's unique ID is the `svix-id`.
 - The job exposes the approved 24-hour retry window, timeout, and exception
   backoff sequence.
-- Asynchronous processing supplies the configured rate-limit middleware.
+- Asynchronous processing supplies `ResendRateLimited`; `sync` processing
+  supplies no queue middleware.
+- The custom middleware consumes at most the configured number of cache
+  limiter hits in a one-second window and releases excess jobs.
 - `sync` exceptions propagate to the request.
 - Asynchronous exceptions remain queue failures.
 - A realistic MIME fixture with an attachment reaches the configured model and
