@@ -148,7 +148,7 @@ After request validation:
 - return 204 for a signed non-`email.received` event;
 - create `Jobs\ProcessResendEmail` with only the signed `email_id` and
   `svix-id`;
-- select the configured queue connection;
+- validate the configured queue connection and positive API rate limit;
 - dispatch the job through Laravel's `dispatch()` helper;
 - return 200 after successful dispatch.
 
@@ -156,7 +156,10 @@ When the configured connection is `sync`, dispatch executes the job in the
 request and propagates exceptions as HTTP 5xx. With an asynchronous connection,
 HTTP 200 means the job was accepted by Laravel's queue, not that mailbox
 processing has completed. Using the `dispatch()` helper also ensures Laravel
-acquires the `ShouldBeUnique` lock before pushing the job.
+acquires the `ShouldBeUnique` lock before pushing the job. If dispatch or
+synchronous processing throws, the controller releases that unique lock before
+rethrowing. Otherwise a failure after lock acquisition but before successful
+queue acceptance could suppress Resend's next webhook retry.
 
 ### `Jobs\ProcessResendEmail`
 
@@ -231,9 +234,9 @@ User-Agent: beyondcode/laravel-mailbox
 ```
 
 The host and scheme for this authenticated request are fixed in code. The
-request uses a five-second connection timeout and a 15-second total timeout.
-It must return a successful JSON response with a non-empty
-`raw.download_url`.
+request does not follow redirects, uses a five-second connection timeout, and
+uses a 15-second total timeout. It must return a successful JSON response with
+a non-empty `raw.download_url`.
 
 Second, download the raw MIME:
 
@@ -283,7 +286,7 @@ short expiration does not make a delayed job unusable.
 | `email.received` without a valid `data.email_id` | HTTP 400; do not dispatch |
 | Valid signed non-`email.received` event | HTTP 204; do not dispatch |
 | Invalid package configuration | HTTP 5xx |
-| Queue dispatch failure | HTTP 5xx, allowing Resend to retry |
+| Queue dispatch failure | Release the delivery's unique lock and return HTTP 5xx, allowing Resend to retry |
 | Successful asynchronous dispatch | HTTP 200 |
 | Successful synchronous processing | HTTP 200 |
 | Receiving API, raw download, MIME conversion, or mailbox failure on `sync` | HTTP 5xx, allowing Resend to retry |
@@ -316,7 +319,8 @@ deduplication key. The driver will not alter the MIME or replace its
 - Never log the API key, webhook secret, raw signature header, or signed
   download URL.
 - Sanitize raw-download exceptions before they can reach failed-job logging.
-- Send the Bearer token only to the fixed Resend API origin.
+- Send the Bearer token only to the fixed Resend API origin and disable
+  redirects on that authenticated request.
 - Require HTTPS for the returned download URL.
 - Disable download redirects so a signed URL cannot redirect the client to an
   unexpected destination.
@@ -354,7 +358,9 @@ All tests use Laravel, bus, queue, cache, and HTTP fakes. No test calls Resend.
 - Signed unrelated events return 204 and dispatch nothing.
 - A signed received event dispatches the expected scalar identifiers.
 - Dispatch uses the configured `sync` or asynchronous connection.
-- A dispatch exception becomes HTTP 5xx.
+- Invalid queue or non-positive rate-limit configuration returns HTTP 5xx.
+- A dispatch exception releases the unique lock and becomes HTTP 5xx.
+- The same delivery can be dispatched when Resend retries after that exception.
 
 ### Client tests
 
@@ -363,7 +369,7 @@ All tests use Laravel, bus, queue, cache, and HTTP fakes. No test calls Resend.
 - The raw request uses the returned HTTPS URL without Authorization.
 - Redirects are disabled for the raw request.
 - A raw MIME fixture is returned byte-for-byte.
-- Metadata 401, 404, 429, and 5xx responses throw.
+- Metadata redirects, 401, 404, 429, and 5xx responses throw.
 - Raw-download failures throw.
 - Missing, empty, malformed, or non-HTTPS `raw.download_url` values throw.
 - An empty raw MIME response throws.
