@@ -10,7 +10,7 @@ class Resend implements DriverInterface
     public function register()
     {
         Route::prefix(config('mailbox.path'))->group(function () {
-            Route::post('/resend', [ResendController::class, '__invoke']);
+            Route::post('/resend', ResendController::class);
         });
     }
 }

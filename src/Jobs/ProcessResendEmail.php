@@ -8,33 +8,20 @@ use BeyondCode\Mailbox\InboundEmail;
 use BeyondCode\Mailbox\Queue\Middleware\ResendRateLimited;
 use DateTimeInterface;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 
-class ProcessResendEmail implements ShouldQueue, ShouldBeUnique
+class ProcessResendEmail implements ShouldQueue
 {
     use InteractsWithQueue, Queueable;
 
     public $timeout = 180;
 
     public string $emailId;
-    public string $webhookId;
 
-    public function __construct(string $emailId, string $webhookId)
+    public function __construct(string $emailId)
     {
         $this->emailId = $emailId;
-        $this->webhookId = $webhookId;
-    }
-
-    public function uniqueId(): string
-    {
-        return $this->webhookId;
-    }
-
-    public function uniqueFor(): int
-    {
-        return 25 * 60 * 60;
     }
 
     public function retryUntil(): DateTimeInterface

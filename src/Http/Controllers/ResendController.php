@@ -4,10 +4,7 @@ namespace BeyondCode\Mailbox\Http\Controllers;
 
 use BeyondCode\Mailbox\Http\Requests\ResendRequest;
 use BeyondCode\Mailbox\Jobs\ProcessResendEmail;
-use Illuminate\Bus\UniqueLock;
-use Illuminate\Contracts\Cache\Repository as Cache;
 use LogicException;
-use Throwable;
 
 class ResendController
 {
@@ -33,19 +30,10 @@ class ResendController
             throw new LogicException('Resend API key is not configured.');
         }
 
-        $job = (new ProcessResendEmail($request->emailId(), $request->webhookId()))
+        $job = (new ProcessResendEmail($request->emailId()))
             ->onConnection($connection);
-        $synchronous = $job->usesSynchronousQueue();
 
-        try {
-            dispatch($job);
-        } catch (Throwable $exception) {
-            if (! $synchronous) {
-                (new UniqueLock(app(Cache::class)))->release($job);
-            }
-
-            throw $exception;
-        }
+        dispatch($job);
 
         return response('', 200);
     }

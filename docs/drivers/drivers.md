@@ -116,10 +116,10 @@ a `retry_after` setting, configure `retry_after` above 180 seconds. For SQS,
 set the queue's Default Visibility Timeout above 180 seconds instead. Keep the
 worker's `--timeout` below the applicable retry or visibility window.
 
-Unique-job locking and per-second throttling both use Laravel's cache. Workers
-on multiple nodes must use the same shared cache store, and that store must
-support atomic locks and increments, such as Redis. Workers must also have
-enough memory for the complete MIME message, including attachments.
+Per-second throttling uses Laravel's cache. Workers on multiple nodes must use
+the same shared cache store, and that store must support atomic increments,
+such as Redis. Workers must also have enough memory for the complete MIME
+message, including attachments.
 
 Webhook and queue delivery are at least once. Make mailbox handlers with side
 effects idempotent, preferably using the raw email's stable `Message-Id` as the

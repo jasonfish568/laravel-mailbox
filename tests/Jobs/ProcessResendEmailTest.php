@@ -24,28 +24,18 @@ class ProcessResendEmailTest extends TestCase
     }
 
     #[Test]
-    public function it_exposes_unique_retry_and_middleware_configuration()
+    public function it_exposes_retry_and_middleware_configuration()
     {
         Carbon::setTestNow('2026-07-28 00:00:00');
 
-        $syncJob = (new ProcessResendEmail('email_123', 'msg_123'))->onConnection('sync');
-        $queuedJob = (new ProcessResendEmail('email_123', 'msg_123'))->onConnection('redis');
+        $syncJob = (new ProcessResendEmail('email_123'))->onConnection('sync');
+        $queuedJob = (new ProcessResendEmail('email_123'))->onConnection('redis');
 
-        $this->assertSame('msg_123', $queuedJob->uniqueId());
         $this->assertSame([5, 60, 300, 1800, 7200, 18000, 36000], $queuedJob->backoff());
         $this->assertSame(now()->addDay()->timestamp, $queuedJob->retryUntil()->timestamp);
         $this->assertSame(180, $queuedJob->timeout);
         $this->assertSame([], $syncJob->middleware());
         $this->assertInstanceOf(ResendRateLimited::class, $queuedJob->middleware()[0]);
-    }
-
-    #[Test]
-    public function it_expires_unique_locks_after_the_retry_window()
-    {
-        $job = new ProcessResendEmail('email_123', 'msg_123');
-
-        $this->assertTrue(is_callable([$job, 'uniqueFor']));
-        $this->assertSame(25 * 60 * 60, $job->uniqueFor());
     }
 
     #[Test]
@@ -55,7 +45,7 @@ class ProcessResendEmailTest extends TestCase
             'queue.connections.resend-inline' => ['driver' => 'sync'],
         ]);
 
-        $job = (new ProcessResendEmail('email_123', 'msg_123'))
+        $job = (new ProcessResendEmail('email_123'))
             ->onConnection('resend-inline');
 
         $this->assertSame([], $job->middleware());
@@ -73,7 +63,7 @@ class ProcessResendEmailTest extends TestCase
             ->once()
             ->with(Mockery::type(TestResendInboundEmail::class));
 
-        (new ProcessResendEmail('email_123', 'msg_123'))->handle($client);
+        (new ProcessResendEmail('email_123'))->handle($client);
 
         $this->assertSame('raw mime', TestResendInboundEmail::$rawMessage);
     }
@@ -91,7 +81,7 @@ class ProcessResendEmailTest extends TestCase
         Mailbox::shouldReceive('callMailboxes')->never();
 
         try {
-            (new ProcessResendEmail('email_123', 'msg_123'))->handle($client);
+            (new ProcessResendEmail('email_123'))->handle($client);
             $this->fail('Expected the client exception.');
         } catch (RuntimeException $exception) {
             $this->assertSame($expected, $exception);

@@ -8,13 +8,8 @@ use BeyondCode\Mailbox\InboundEmail;
 use BeyondCode\Mailbox\Jobs\ProcessResendEmail;
 use BeyondCode\Mailbox\Tests\Concerns\SignsResendWebhooks;
 use BeyondCode\Mailbox\Tests\TestCase;
-use Illuminate\Bus\UniqueLock;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Contracts\Cache\Lock;
-use Illuminate\Contracts\Cache\Repository as Cache;
-use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -168,9 +163,21 @@ class ResendTest extends TestCase
 
         Bus::assertDispatched(ProcessResendEmail::class, function ($job) {
             return $job->emailId === 'email_123'
-                && $job->webhookId === 'msg_123'
                 && $job->connection === 'redis';
         });
+    }
+
+    #[Test]
+    public function it_dispatches_repeated_webhooks_for_business_level_idempotency()
+    {
+        Bus::fake();
+        config(['mailbox.services.resend.queue_connection' => 'redis']);
+        $payload = '{"type":"email.received","data":{"email_id":"email_123"}}';
+
+        $this->postResendWebhook($payload, 'msg_repeated')->assertOk();
+        $this->postResendWebhook($payload, 'msg_repeated')->assertOk();
+
+        Bus::assertDispatchedTimes(ProcessResendEmail::class, 2);
     }
 
     #[Test]
@@ -288,7 +295,7 @@ class ResendTest extends TestCase
     }
 
     #[Test]
-    public function it_releases_the_unique_lock_when_dispatch_fails()
+    public function it_reports_queue_dispatch_failures_as_server_errors()
     {
         config([
             'mailbox.services.resend.queue_connection' => 'resend-async',
@@ -303,69 +310,13 @@ class ResendTest extends TestCase
 
         $this->app->instance(Dispatcher::class, $dispatcher);
 
-        $payload = '{"type":"email.received","data":{"email_id":"email_123"}}';
-
         try {
-            $this->postResendWebhook($payload, 'msg_retry')->assertStatus(500);
+            $this->postResendWebhook(
+                '{"type":"email.received","data":{"email_id":"email_123"}}'
+            )->assertStatus(500);
         } finally {
             $this->app->instance(Dispatcher::class, $original);
         }
-
-        Bus::fake();
-
-        $this->postResendWebhook($payload, 'msg_retry')->assertOk();
-        Bus::assertDispatched(ProcessResendEmail::class);
-    }
-
-    #[Test]
-    public function it_does_not_release_a_retry_lock_after_a_named_sync_connection_fails()
-    {
-        config([
-            'mailbox.services.resend.queue_connection' => 'resend-inline',
-            'queue.connections.resend-inline' => ['driver' => 'sync'],
-        ]);
-
-        Http::fake([
-            ResendClient::API_URL.'/email_123' => Http::response('', 500),
-        ]);
-
-        $job = new ProcessResendEmail('email_123', 'msg_sync_interleaving');
-        $lockKey = (new InspectableUniqueLock(
-            $this->app->make(Cache::class)
-        ))->key($job);
-        $retryLock = null;
-        $retryLockAcquired = false;
-
-        Event::listen(JobFailed::class, function () use (
-            $lockKey,
-            &$retryLock,
-            &$retryLockAcquired
-        ) {
-            $retryLock = $this->app->make(Cache::class)->lock($lockKey, 60);
-            $retryLockAcquired = $retryLock->get();
-        });
-
-        $this->postResendWebhook(
-            '{"type":"email.received","data":{"email_id":"email_123"}}',
-            'msg_sync_interleaving'
-        )->assertStatus(500);
-
-        $this->assertTrue($retryLockAcquired);
-        $this->assertInstanceOf(Lock::class, $retryLock);
-
-        $probe = $this->app->make(Cache::class)->lock($lockKey, 60);
-        $thirdRequestAcquired = $probe->get();
-
-        if ($thirdRequestAcquired) {
-            $probe->release();
-        }
-
-        $retryLock->release();
-
-        $this->assertFalse(
-            $thirdRequestAcquired,
-            'The sync exception path released the lock acquired by a concurrent retry.'
-        );
     }
 
     #[Test]
@@ -471,13 +422,5 @@ class TestResendControllerInboundEmail extends InboundEmail
         static::$rawMessage = $message;
 
         return parent::fromMessage($message);
-    }
-}
-
-class InspectableUniqueLock extends UniqueLock
-{
-    public function key($job): string
-    {
-        return $this->getKey($job);
     }
 }

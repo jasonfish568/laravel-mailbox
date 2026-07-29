@@ -76,14 +76,14 @@ class ResendRateLimitedTest extends TestCase
         $this->expectException(LogicException::class);
 
         (new ResendRateLimited)->handle(
-            new ProcessResendEmail('email_123', 'msg_invalid'),
+            new ProcessResendEmail('email_123'),
             fn () => null
         );
     }
 
-    private function queuedJob(string $webhookId): ProcessResendEmail
+    private function queuedJob(string $emailId): ProcessResendEmail
     {
-        $job = new ProcessResendEmail('email_123', $webhookId);
+        $job = new ProcessResendEmail($emailId);
         $job->setJob(new RecordingResendQueueJob(
             $this->app,
             '{}',

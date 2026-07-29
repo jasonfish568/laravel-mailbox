@@ -79,9 +79,4 @@ class ResendRequest extends FormRequest
     {
         return $this->validated('data.email_id');
     }
-
-    public function webhookId(): string
-    {
-        return $this->header('svix-id');
-    }
 }
