@@ -14,7 +14,7 @@ class ResendController
     public function __invoke(ResendRequest $request)
     {
         if ($request->eventType() !== 'email.received') {
-            return response('', 204);
+            return response('', 200);
         }
 
         $connection = config('mailbox.services.resend.queue_connection', 'sync');

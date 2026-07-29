@@ -40,6 +40,15 @@ class ProcessResendEmailTest extends TestCase
     }
 
     #[Test]
+    public function it_expires_unique_locks_after_the_retry_window()
+    {
+        $job = new ProcessResendEmail('email_123', 'msg_123');
+
+        $this->assertTrue(is_callable([$job, 'uniqueFor']));
+        $this->assertSame(25 * 60 * 60, $job->uniqueFor());
+    }
+
+    #[Test]
     public function it_skips_rate_limiting_for_a_named_sync_queue_connection()
     {
         config([

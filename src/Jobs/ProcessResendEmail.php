@@ -32,6 +32,11 @@ class ProcessResendEmail implements ShouldQueue, ShouldBeUnique
         return $this->webhookId;
     }
 
+    public function uniqueFor(): int
+    {
+        return 25 * 60 * 60;
+    }
+
     public function retryUntil(): DateTimeInterface
     {
         return now()->addDay();

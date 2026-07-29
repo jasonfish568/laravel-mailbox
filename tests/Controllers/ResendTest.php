@@ -150,7 +150,7 @@ class ResendTest extends TestCase
         Bus::fake();
 
         $this->postResendWebhook('{"type":"email.delivered","data":{}}')
-            ->assertNoContent();
+            ->assertOk();
 
         Bus::assertNothingDispatched();
     }
@@ -330,7 +330,9 @@ class ResendTest extends TestCase
         ]);
 
         $job = new ProcessResendEmail('email_123', 'msg_sync_interleaving');
-        $lockKey = UniqueLock::getKey($job);
+        $lockKey = (new InspectableUniqueLock(
+            $this->app->make(Cache::class)
+        ))->key($job);
         $retryLock = null;
         $retryLockAcquired = false;
 
@@ -469,5 +471,13 @@ class TestResendControllerInboundEmail extends InboundEmail
         static::$rawMessage = $message;
 
         return parent::fromMessage($message);
+    }
+}
+
+class InspectableUniqueLock extends UniqueLock
+{
+    public function key($job): string
+    {
+        return $this->getKey($job);
     }
 }
