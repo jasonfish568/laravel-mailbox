@@ -45,7 +45,7 @@ class ResendWebhookSignatureTest extends TestCase
     public function it_rejects_any_raw_body_change()
     {
         $this->assertFalse((new ResendWebhookSignature)->verify(
-            self::PAYLOAD." ",
+            self::PAYLOAD.' ',
             'msg_test',
             self::TIMESTAMP,
             'v1,'.self::SIGNATURE,
